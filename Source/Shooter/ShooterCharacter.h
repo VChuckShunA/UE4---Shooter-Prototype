@@ -4,8 +4,39 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "AmmoType.h"
 #include "ShooterCharacter.generated.h"
 
+
+UENUM(BlueprintType)
+enum class ECombatState : uint8
+{
+	ECS_Unoccupied UMETA(DisplayName = "Unoccupied"),
+	ECS_FireTimerInProgress UMETA(DisplayName = "FireTimerInProgress"),
+	ECS_Reloading UMETA(DisplayName = "Reloading"),
+	ECS_Equipping UMETA(DisplayName = "Equipping"),
+
+	ECS_MAX UMETA(DisplayName = "DefaultMAX")
+};
+
+
+
+USTRUCT(BlueprintType)
+struct FInterpLocation
+{
+	GENERATED_BODY()
+
+		//Scene componenet to use for its location for interping
+		UPROPERTY(VisibleAnywhere,BlueprintReadOnly)
+		USceneComponent* SceneComponent;
+	//Number of items interping to/at this scene component
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	int32 ItemCount;
+};
+
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FEquipItemDelegate, int32, CurrentSlotIndex, int32, NewSlotIndex);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHighlightIconDelegate, int32, SlotIndex, bool, bStartAnimation);
 UCLASS()
 class SHOOTER_API AShooterCharacter : public ACharacter
 {
@@ -88,6 +119,79 @@ protected:
 
 	//Trace for items if overlappedItemCount >0
 	void TraceForItems();
+
+
+	//Spawns a default weapoon and equips it
+	class AWeapon* SpawnDefaultWeapon();
+
+	//Takes a weapon and equips it to the mesh
+	void EquipWeapon(AWeapon* WeaponToEquip, bool bSwapping = false);
+
+	//Detach weapon and let it fall to the ground
+	void DropWeapon();
+
+	void SelectButtonPressed();
+	void SelectButtonReleased();
+
+
+	//Drops currently equipped weapon and equips TraceHitItem
+	void SwapWeapon(AWeapon* WeaponToSwap);
+
+	//Initialize the Ammo Map with ammo values
+	void InitializeAmmoMap();
+
+
+	//Check to make sure our Weapon has ammo
+	bool WeaponHasAmmo();
+
+	//FireWeapon Functions
+	void PlayFireSound();
+	void SendBullet();
+	void PlayGunFireMontage();
+
+	//Bound to the R key and Gamepad Face Button Left
+	void ReloadButtonPressed();
+
+	//Handle Reloading of the Weapon
+	void ReloadWeapon();
+
+	//Checkks to see if we have ammo of the equipped Weapon's Ammo Type
+	bool CarryingAmmo();
+
+	//Called from Animation Blueprint with Grab Clip notify
+	UFUNCTION(BlueprintCallable)
+		void GrabClip();
+
+	//Called from Animation Blueprint with Release Clip Notify
+	UFUNCTION(BlueprintCallable)
+		void ReleaseClip();
+
+	void CrouchButtonPressed();
+
+	virtual void Jump() override;
+
+	//Interps capusle half height when coruhcing/standing
+	void InterpCapsuleHalfHeight(float DeltaTime);
+
+	void Aim();
+	void StopAiming();
+
+	void PickupAmmo(class AAmmo* Ammo);
+
+	void InitializeInterpLocations();
+
+	void FKeyPressed();
+	void OneKeyPressed();
+	void TwoKeyPressed();
+	void ThreeKeyPressed();
+	void FourKeyPressed();
+	void FiveKeyPressed();
+
+	void ExchangeInventoryItems(int32 CurrentItemIndex, int32 NewItemIndex);
+
+	int32 GetEmptyInventorySlot();
+
+	void HighlightInventorySlot();
 public:	
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
@@ -145,14 +249,6 @@ private:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"), meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
 	float MouseAimingLookUpRate;
 
-	//Randomized gunshot sound cue
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Combat, meta = (AllowPrivateAccess = "true"))
-	class USoundCue* FireSound;
-
-	//Flash spawned at barrelsocket
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Combat, meta = (AllowPrivateAccess = "true"))
-	class UParticleSystem* MuzzleFlash;
-
 	//Montage for firing the weapon
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Combat, meta = (AllowPrivateAccess = "true"))
 	class UAnimMontage* HipFireMontage;
@@ -170,9 +266,11 @@ private:
 		bool bAiming;
 
 	//Default Camera field of view value
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Combat, meta = (AllowPrivateAccess = "true"))
 	float CameraDefaultFOV;
 
 	//Field of view value for when zoomed in
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Combat, meta = (AllowPrivateAccess = "true"))
 	float CameraZoomedFOV;
 
 	//Current field of view of this frame
@@ -208,9 +306,6 @@ private:
 	//True when we can fire. Flase when waiting for the timer
 	bool bShouldFire;
 
-	//Rate of automatic gun fire
-	float AutomaticFireRate;
-
 	///Sets a timer between gunshots
 	FTimerHandle AutoFireTimer;
 
@@ -224,6 +319,159 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Items, meta = (AllowPrivateAccess = "true"))
 		class AItem* TraceHitItemLastFrame;
 
+	//Currently equipped weapon
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Combat, meta = (AllowPrivateAccess = "true"))
+		AWeapon* EquippedWeapon;
+
+		//Set this in Blueprintfor the default Weapon class
+		UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Combat, meta = (AllowPrivateAccess = "true"))
+		TSubclassOf<AWeapon> DefaultWeaponClass;
+	
+		//The item currenly hit by our trace in TraceForItems(could be null)
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Combat, meta = (AllowPrivateAccess = "true"))
+			AItem* TraceHitItem;
+
+		//Distance outward from the camera for the interp destination
+		UPROPERTY(EditANywhere,BlueprintReadOnly, Category = Items, meta = (AllowPrivateAccess = "true"))
+			float CameraInterpDistance;
+		//Distance upward from the camera for the interp destination
+		UPROPERTY(EditANywhere, BlueprintReadOnly, Category = Items, meta = (AllowPrivateAccess = "true"))
+		float CameraInterpElevation;
+
+		//mapt ot keep track of the ammo of the differe anmmo types
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Items, meta = (AllowPrivateAccess = "true"))
+			TMap<EAmmoType, int32> AmmoMap;
+
+		//Starting amount of 9mm ammo
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Items, meta = (AllowPrivateAccess = "true"))
+			int32 Starting9mmAmmo;
+
+		//Starting amount of AR ammo
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Items, meta = (AllowPrivateAccess = "true"))
+			int32 StartingARAmmo;
+
+		//COmbat state can only fire or reload if unoccupied
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Combat, meta = (AllowPrivateAccess = "true"))
+		ECombatState CombatState;
+
+		//Montage for reload animations
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Combat, meta = (AllowPrivateAccess = "true"))
+			UAnimMontage* ReloadMontage;
+
+		//Montage for reload animations
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Combat, meta = (AllowPrivateAccess = "true"))
+			UAnimMontage* EquipMontage;
+
+		UFUNCTION(BlueprintCallable)
+		void FinishReloading();
+
+
+		UFUNCTION(BlueprintCallable)
+		void FinishEquipping();
+
+		//Transform of the clip when we first grab the clip during reloading
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Combat, meta = (AllowPrivateAccess = "true"))
+			FTransform ClipTransform;
+
+		//Scene component to attach to the character's hand during reloading
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Combat, meta = (AllowPrivateAccess = "true"))
+			USceneComponent* HandSceneComponent;
+
+		//True when crouching
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Movement, meta = (AllowPrivateAccess = "true"))
+			bool bCrouching;
+
+		//Regular movement speed
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Movement, meta = (AllowPrivateAccess = "true"))
+			float BaseMovementSpeed;
+
+		//Crouch movement speed
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Movement, meta = (AllowPrivateAccess = "true"))
+			float CrouchMovementSpeed;
+
+		//Current half height of the capsule
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Movement, meta = (AllowPrivateAccess = "true"))
+		float CurrentCapsuleHalfHeight;
+
+		//Half height of the capsule when not crouching
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Movement, meta = (AllowPrivateAccess = "true"))
+		float StandingCapsuleHalfHeight;
+
+		//Half height of the capusle when crouching
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Movement, meta = (AllowPrivateAccess = "true"))
+		float CrouchingCapsuleHalfHeight;
+
+		//Ground friction while not crouching
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Movement, meta = (AllowPrivateAccess = "true"))
+			float BaseGroundFriction;
+
+		//Ground friction while crouching
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Movement, meta = (AllowPrivateAccess = "true"))
+			float CrouchingGroundFriction;
+
+		//Used for knowing when the aiming button is pressed
+		bool bAimingButtonPressed;
+
+		UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+			USceneComponent* WeaponInterpComp;
+
+		UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+			USceneComponent* InterpComp1;
+
+		UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+			USceneComponent* InterpComp2;
+
+		UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+			USceneComponent* InterpComp3;
+
+		UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+			USceneComponent* InterpComp4;
+
+		UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+			USceneComponent* InterpComp5;
+
+		UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+			USceneComponent* InterpComp6;
+
+		//Array of Interp location structs
+		UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+		TArray<FInterpLocation> InterpLocations;
+
+		FTimerHandle PickupSoundTimer;
+		FTimerHandle EquipSoundTimer;
+
+		bool bShouldPlayPickupSound;
+		bool bShouldPlayEquipSound;
+
+		void ResetPickupSoundTimer();
+		void ResetEquipSoundTimer();
+
+		//Time to wait before we can play another pickup sound
+		UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Items, meta=(AllowPrivateAccess="true"))
+		float PickupSoundResetTime;
+
+		//Time to wait before we can play another equip sound
+		UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Items, meta = (AllowPrivateAccess = "true"))
+		float EquipSoundResetTime;
+
+		//An array of AItems for our inventory
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category=Inventory,meta=(AllowPrivateAccess="true"))
+		TArray<AItem*> Inventory;
+
+		//Delgate for sending slot information to Inventory Bar when equipping
+		UPROPERTY(BlueprintAssignable, Category= Delegates, meta = (AllowPrivateAccess = "true"))
+		FEquipItemDelegate EquipItemDelegate;
+		
+		//Delgate for setting slot information when playing the icon animation
+		UPROPERTY(BlueprintAssignable, Category = Delegates, meta = (AllowPrivateAccess = "true"))
+		FHighlightIconDelegate HighlightIconDelegate;
+
+
+		//The index for the currently highlighted slot
+		UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category= Inventory ,meta = (AllowPrivateAccess = "true"))
+		int32 HighlightedSlot;
+
+		const int32 INVENTORY_CAPACITY{ 6 };
 	float ShootTimeDuration;
 	bool bFiringBullet;
 	FTimerHandle CrosshairShootTimer;
@@ -246,4 +494,26 @@ public:
 	//Adds/Substracts to/from OverlappedItemCount and updates bShouldTraceForItems
 	void IncrementOverlappedItemCount(int8 Amount);
 
+	//No longer needed;AItem has GetInterpLocation
+	//FVector GetCameraInterpLocation();
+
+	void GetPickupItem(AItem* Item);
+
+	FORCEINLINE ECombatState GetCombatState() const { return CombatState; }
+	FORCEINLINE bool GetCrouching() const { return bCrouching; }
+	FInterpLocation GetInterpLocation(int32 Index);
+
+	//Returns the index in InterpLocations array with the lowest Item COunt
+	int32 GetInterpLocationIndex();
+
+	void IncrementInterpLocItemCount(int32 Index, int32 Amount);
+
+	FORCEINLINE bool ShouldPlayPickupSound() const { return bShouldPlayPickupSound; }
+	FORCEINLINE bool ShouldPlayEquipSound() const { return bShouldPlayEquipSound; }
+
+	void StartPickupSoundTimer();
+	void StartEquipSoundTimer();
+	void UnhighlightInventorySlot();
+
+	FORCEINLINE AWeapon* GetEquippedWeapon() const { return EquippedWeapon; }
 };
