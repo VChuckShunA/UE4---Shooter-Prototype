@@ -18,6 +18,8 @@
 #include "AmmoType.h"
 #include "Components/CapsuleComponent.h"
 #include "Ammo.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
+#include "Shooter.h"
 // Sets default values
 AShooterCharacter::AShooterCharacter() :
 	//Base rates for turning/looking up
@@ -974,7 +976,19 @@ void AShooterCharacter::UnhighlightInventorySlot()
 	HighlightedSlot = -1;
 }
 
+EPhysicalSurface AShooterCharacter::GetSurfaceType()
+{
+	FHitResult HitResult;
+	const FVector Start{ GetActorLocation() };
+	const FVector End{ Start + FVector(0.f,0.f,-400.f) };
+	FCollisionQueryParams QueryParams;
+	QueryParams.bReturnPhysicalMaterial = true;
 
+	GetWorld()->LineTraceSingleByChannel(HitResult, Start, End, ECollisionChannel::ECC_Visibility, QueryParams);
+	return UPhysicalMaterial::DetermineSurfaceType(HitResult.PhysMaterial.Get());
+
+
+}
 // Called every frame
 void AShooterCharacter::Tick(float DeltaTime)
 {
